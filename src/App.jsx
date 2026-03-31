@@ -29,6 +29,19 @@ const DEFAULT_PRESSURE_DEPTH_REFERENCE = 'gl'
 const DEFAULT_PORE_EMW_SG = 1
 const DEFAULT_FRACTURE_EMW_SG = 1.6
 const FRACTURE_SURFACE_PRESSURE_KPA = 200
+const LAYER_BREAKS_M = [150, 320]
+const LAYERED_PORE_GRADIENTS_KPA_PER_M = [9.2, 10.3, 11.1]
+const LAYERED_FRACTURE_GRADIENTS_KPA_PER_M = [14.8, 16.2, 17.1]
+const LAYERED_PORE_SPIKES = [
+  { centerM: 110, amplitudeKPa: 90, widthM: 18 },
+  { centerM: 230, amplitudeKPa: -70, widthM: 22 },
+  { centerM: 410, amplitudeKPa: 100, widthM: 20 },
+]
+const LAYERED_FRACTURE_SPIKES = [
+  { centerM: 80, amplitudeKPa: -60, widthM: 16 },
+  { centerM: 270, amplitudeKPa: 100, widthM: 24 },
+  { centerM: 440, amplitudeKPa: -85, widthM: 18 },
+]
 const MIN_DEPTH_WINDOW_M = 5
 const MIN_PRESSURE_WINDOW_KPA = 25
 const MIN_EMW_WINDOW_SG = 0.02
@@ -55,7 +68,51 @@ function buildDepths() {
   return depths
 }
 
+function computeSegmentedPressure(depthBelowGroundM, gradientsKPaPerM) {
+  const [firstBreakM, secondBreakM] = LAYER_BREAKS_M
+  const [firstGradient, secondGradient, thirdGradient] = gradientsKPaPerM
+  const firstSegmentDepth = Math.min(depthBelowGroundM, firstBreakM)
+  const secondSegmentDepth = Math.min(
+    Math.max(depthBelowGroundM - firstBreakM, 0),
+    secondBreakM - firstBreakM,
+  )
+  const thirdSegmentDepth = Math.max(depthBelowGroundM - secondBreakM, 0)
+
+  return (
+    firstSegmentDepth * firstGradient +
+    secondSegmentDepth * secondGradient +
+    thirdSegmentDepth * thirdGradient
+  )
+}
+
+function computeSpikeAdjustment(depthBelowGroundM, spikes) {
+  return spikes.reduce((totalAdjustment, spike) => {
+    const normalizedDistance = (depthBelowGroundM - spike.centerM) / spike.widthM
+
+    return totalAdjustment + spike.amplitudeKPa * Math.exp(-(normalizedDistance ** 2))
+  }, 0)
+}
+
+function computeLayeredPressure(depthBelowGroundM, type) {
+  if (type === 'pore') {
+    return (
+      computeSegmentedPressure(depthBelowGroundM, LAYERED_PORE_GRADIENTS_KPA_PER_M) +
+      computeSpikeAdjustment(depthBelowGroundM, LAYERED_PORE_SPIKES)
+    )
+  }
+
+  return (
+    FRACTURE_SURFACE_PRESSURE_KPA +
+    computeSegmentedPressure(depthBelowGroundM, LAYERED_FRACTURE_GRADIENTS_KPA_PER_M) +
+    computeSpikeAdjustment(depthBelowGroundM, LAYERED_FRACTURE_SPIKES)
+  )
+}
+
 function computePressure(depthBelowGroundM, modelType, type) {
+  if (modelType === 'layered') {
+    return computeLayeredPressure(depthBelowGroundM, type)
+  }
+
   if (type === 'pore') {
     return PORE_PRESSURE_GRADIENT_KPA_PER_M * depthBelowGroundM
   }
@@ -329,11 +386,13 @@ function FormationDefinedControlsPanel({
       <div className="panel-header">
         <div>
           <p className="eyebrow">Reference Diagram</p>
-        </div>
-        <div className="panel-controls">
-          <div className="control-group compact-control-group">
-            <label>Model</label>
-            <div className="segmented-control" role="radiogroup" aria-label="Pressure model">
+          <div className="inline-labeled-control">
+            <span className="inline-labeled-control__label">Model</span>
+            <div
+              className="segmented-control segmented-control--three"
+              role="radiogroup"
+              aria-label="Pressure model"
+            >
               <button
                 type="button"
                 className={modelType === 'idealized' ? 'is-active' : ''}
@@ -348,9 +407,15 @@ function FormationDefinedControlsPanel({
               >
                 Realistic
               </button>
+              <button
+                type="button"
+                className={modelType === 'layered' ? 'is-active' : ''}
+                onClick={() => onModelTypeChange('layered')}
+              >
+                Layered
+              </button>
             </div>
           </div>
-
           <div className="control-group">
             <label htmlFor="formation-rkb-range">RKB elevation above ground</label>
             <div className="control-row">
@@ -376,6 +441,7 @@ function FormationDefinedControlsPanel({
             </div>
           </div>
         </div>
+        <div className="panel-controls" />
       </div>
 
       <ReferenceDiagramSvg
@@ -508,8 +574,8 @@ function DocumentationPanel({ activeTab }) {
                 <h2>Overview</h2>
                 <ul>
                   <li>Formation pressures are fixed relative to ground level.</li>
-                  <li>The pressure plot can be displayed relative to ground level or RKB.</li>
                   <li>Equivalent mud weight is recalculated relative to RKB.</li>
+                  <li>The layered dataset adds three gradient regimes plus local pressure spikes.</li>
                 </ul>
               </section>
 
@@ -531,7 +597,10 @@ function DocumentationPanel({ activeTab }) {
                 <ul>
                   <li>Fixed EMW lines imply gauge pressure increasing linearly with depth below RKB.</li>
                   <li>This tab shows the inverse of the formation-defined view.</li>
-                  <li>Vertical EMW lines represent fixed density assumptions rather than fixed rock pressures.</li>
+                  <li>
+                    Increasing the RKB-GL offset changes the implied formation pressure values,
+                    which is not physically realistic because rock pressures are tied to fixed true depths.
+                  </li>
                 </ul>
               </section>
 

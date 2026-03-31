@@ -337,6 +337,20 @@
   min-width: auto;
 }
 
+.inline-labeled-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.inline-labeled-control__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .control-group label {
   display: block;
   font-size: 0.9rem;
@@ -380,6 +394,16 @@
   background: rgba(230, 236, 242, 0.96);
   border: 1px solid rgba(125, 145, 166, 0.24);
   gap: 0.22rem;
+}
+
+.segmented-control--three {
+  grid-template-columns: repeat(3, max-content);
+}
+
+.segmented-control--three button {
+  font-size: 0.78rem;
+  padding: 0.36rem 0.62rem;
+  white-space: nowrap;
 }
 
 .segmented-control button {
