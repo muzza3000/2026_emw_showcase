@@ -145,6 +145,133 @@
   margin-bottom: 1rem;
 }
 
+.chart-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.chart-heading h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.chart-zoom-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.chart-mode-badge {
+  border: 0;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chart-mode-badge:disabled {
+  cursor: default;
+  opacity: 0.82;
+}
+
+.chart-mode-badge.is-auto {
+  background: rgba(11, 110, 138, 0.1);
+  color: #0b6e8a;
+}
+
+.chart-mode-badge.is-zoomed {
+  background: rgba(213, 122, 42, 0.12);
+  color: #b76317;
+}
+
+.chart-mode-badge.is-manual {
+  background: rgba(77, 95, 115, 0.14);
+  color: #324657;
+}
+
+.chart-axis-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  flex-wrap: wrap;
+  margin: -0.15rem 0 0.7rem;
+}
+
+.chart-axis-label {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.chart-axis-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.chart-axis-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0.22rem;
+  border-radius: 999px;
+  background: rgba(230, 236, 242, 0.96);
+  border: 1px solid rgba(125, 145, 166, 0.24);
+  gap: 0.22rem;
+}
+
+.chart-axis-toggle button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.38rem 0.72rem;
+  color: #4d5f73;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chart-axis-toggle button.is-active {
+  background: #fff8ef;
+  color: #183041;
+  box-shadow: 0 1px 4px rgba(24, 48, 65, 0.12);
+}
+
+.chart-axis-inputs input {
+  width: 88px;
+  padding: 0.42rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 145, 166, 0.24);
+  background: rgba(255, 255, 255, 0.92);
+  color: #183041;
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.chart-axis-inputs input[readonly] {
+  background: rgba(244, 247, 251, 0.92);
+  color: #6f8397;
+  cursor: default;
+}
+
+.chart-axis-inputs span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.9rem 1rem;
+}
+
 .eyebrow {
   margin: 0 0 0.35rem;
   text-transform: uppercase;
@@ -156,6 +283,10 @@
 
 .control-group {
   min-width: min(100%, 220px);
+}
+
+.compact-control-group {
+  min-width: auto;
 }
 
 .control-group label {
@@ -183,6 +314,38 @@
 .unit-label {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0.22rem;
+  border-radius: 999px;
+  background: rgba(230, 236, 242, 0.96);
+  border: 1px solid rgba(125, 145, 166, 0.24);
+  gap: 0.22rem;
+}
+
+.segmented-control button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.4rem 0.85rem;
+  color: #4d5f73;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.segmented-control button.is-active {
+  background: #fff8ef;
+  color: #183041;
+  box-shadow: 0 1px 4px rgba(24, 48, 65, 0.12);
 }
 
 .rig-diagram {
@@ -311,6 +474,11 @@
   height: 100%;
   min-height: 0;
   flex: 1;
+  cursor: grab;
+}
+
+.chart-wrap.is-panning {
+  cursor: grabbing;
 }
 
 .rig-panel {
@@ -336,6 +504,18 @@
 .tooltip-title {
   font-weight: 700;
   margin-bottom: 0.45rem;
+}
+
+.tooltip-emphasis {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(243, 247, 251, 0.16);
+  color: #f8e6c9;
+}
+
+.tooltip-emphasis strong {
+  color: #fff8ef;
+  font-size: 0.98rem;
 }
 
 @media (max-width: 1080px) {
@@ -368,6 +548,11 @@
   .panel-header,
   .chart-heading {
     flex-direction: column;
+  }
+
+  .panel-controls {
+    width: 100%;
+    justify-content: stretch;
   }
 
   .chart-legend {
