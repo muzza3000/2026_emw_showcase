@@ -24,6 +24,10 @@ const MAX_TRUE_DEPTH_M = 500
 const MAX_RKB_ELEVATION_M = 50
 const DEFAULT_RKB_ELEVATION_M = 12
 const DEFAULT_MODEL_TYPE = 'idealized'
+const DEFAULT_ACTIVE_TAB = 'formation'
+const DEFAULT_PRESSURE_DEPTH_REFERENCE = 'gl'
+const DEFAULT_PORE_EMW_SG = 1
+const DEFAULT_FRACTURE_EMW_SG = 1.6
 const FRACTURE_SURFACE_PRESSURE_KPA = 200
 const MIN_DEPTH_WINDOW_M = 5
 const MIN_PRESSURE_WINDOW_KPA = 25
@@ -37,6 +41,20 @@ const PORE_PRESSURE_GRADIENT_KPA_PER_M =
 const FRACTURE_PRESSURE_GRADIENT_KPA_PER_M =
   (FRACTURE_PRESSURE_GRADIENT_PSI_PER_FT * PSI_TO_KPA) / FEET_TO_METERS
 
+function buildDepths() {
+  const depths = []
+
+  for (
+    let trueDepthBelowGroundM = 0;
+    trueDepthBelowGroundM <= MAX_TRUE_DEPTH_M;
+    trueDepthBelowGroundM += DEPTH_INCREMENT_M
+  ) {
+    depths.push(trueDepthBelowGroundM)
+  }
+
+  return depths
+}
+
 function computePressure(depthBelowGroundM, modelType, type) {
   if (type === 'pore') {
     return PORE_PRESSURE_GRADIENT_KPA_PER_M * depthBelowGroundM
@@ -49,6 +67,48 @@ function computePressure(depthBelowGroundM, modelType, type) {
   }
 
   return linearPressure
+}
+
+function buildFormationDefinedDataset(rkbElevationM, modelType) {
+  return buildDepths().map((trueDepthBelowGroundM) => {
+    const depthBelowRkbM = trueDepthBelowGroundM + rkbElevationM
+    const porePressureKPa = computePressure(trueDepthBelowGroundM, modelType, 'pore')
+    const fracturePressureKPa = computePressure(trueDepthBelowGroundM, modelType, 'fracture')
+    const porePressurePa = porePressureKPa * 1000
+    const fracturePressurePa = fracturePressureKPa * 1000
+    const poreEmwSg =
+      depthBelowRkbM > 0 ? porePressurePa / (GRAVITY_M_PER_S2 * depthBelowRkbM) / 1000 : null
+    const fractureEmwSg =
+      depthBelowRkbM > 0
+        ? fracturePressurePa / (GRAVITY_M_PER_S2 * depthBelowRkbM) / 1000
+        : null
+
+    return {
+      trueDepthBelowGroundM,
+      depthBelowRkbM,
+      porePressureKPa,
+      fracturePressureKPa,
+      poreEmwSg,
+      fractureEmwSg,
+    }
+  })
+}
+
+function buildEmwDefinedDataset(rkbElevationM, poreEmwSg, fractureEmwSg) {
+  return buildDepths().map((trueDepthBelowGroundM) => {
+    const depthBelowRkbM = trueDepthBelowGroundM + rkbElevationM
+    const porePressureKPa = poreEmwSg * GRAVITY_M_PER_S2 * depthBelowRkbM
+    const fracturePressureKPa = fractureEmwSg * GRAVITY_M_PER_S2 * depthBelowRkbM
+
+    return {
+      trueDepthBelowGroundM,
+      depthBelowRkbM,
+      porePressureKPa,
+      fracturePressureKPa,
+      poreEmwSg,
+      fractureEmwSg,
+    }
+  })
 }
 
 function clampDepthDomain(domain, maxDepth) {
@@ -105,6 +165,14 @@ function clampRkbElevation(nextValue) {
   return Math.min(MAX_RKB_ELEVATION_M, Math.max(0, nextValue))
 }
 
+function clampEmwSg(nextValue, fallbackValue) {
+  if (Number.isNaN(nextValue)) {
+    return fallbackValue
+  }
+
+  return Math.max(0, nextValue)
+}
+
 function buildHoverState({ point, series, chartType }) {
   if (!point || !series) {
     return null
@@ -132,7 +200,7 @@ function buildHoverState({ point, series, chartType }) {
   }
 }
 
-function DepthTooltip({ chartType, hoverState }) {
+function DepthTooltip({ chartType, hoverState, showApparentGradient = true }) {
   const point = hoverState?.hoveredRow
 
   if (!hoverState || !point || hoverState.chartType !== chartType) {
@@ -152,14 +220,11 @@ function DepthTooltip({ chartType, hoverState }) {
       <p className="tooltip-title">{seriesLabel}</p>
       <p>True depth below ground: {formatNumber(point.trueDepthBelowGroundM)} m</p>
       <p>Depth below RKB: {formatNumber(point.depthBelowRkbM)} m</p>
-      <p>Gauge pressure: {formatNumber(pressureKPa)} kPa</p>
-      <p>
-        Gradient from RKB: {formatNumber(apparentGradientKPaPerM, 2)} kPa/m →{' '}
-        {formatNumber(apparentGradientKPaPerM, 2)} / g = {formatNumber(emwSg, 3)} SG
-      </p>
-      <p className="tooltip-emphasis">
-        EMW ref. RKB: <strong>{formatNumber(emwSg, 3)} SG</strong>
-      </p>
+      <p>EMW: {formatNumber(emwSg, 3)} SG</p>
+      <p>Implied gauge pressure: {formatNumber(pressureKPa)} kPa</p>
+      {showApparentGradient ? (
+        <p>Apparent gradient: {formatNumber(apparentGradientKPaPerM, 2)} kPa/m</p>
+      ) : null}
     </div>
   )
 }
@@ -193,7 +258,7 @@ function HoverDot({ cx, cy, payload, stroke, series, chartType, hoverState, setH
   )
 }
 
-function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTypeChange }) {
+function ReferenceDiagramSvg({ rkbElevationM, descriptionLines }) {
   const totalHeight = 500
   const topPadding = 48
   const bottomPadding = 160
@@ -204,6 +269,61 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTyp
     ((MAX_RKB_ELEVATION_M - rkbElevationM) / MAX_RKB_ELEVATION_M) * usableHeight
   const groundY = topPadding + usableHeight
 
+  return (
+    <svg viewBox="0 0 320 500" className="rig-diagram" aria-label="Rig elevation diagram">
+      <defs>
+        <linearGradient id="sandstoneGradient" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="rgba(202, 158, 90, 0.18)" />
+          <stop offset="100%" stopColor="rgba(202, 158, 90, 0.04)" />
+        </linearGradient>
+      </defs>
+
+      <rect
+        x="28"
+        y={groundY}
+        width="264"
+        height={sandstoneHeight}
+        fill="url(#sandstoneGradient)"
+        rx="14"
+      />
+      <line x1="40" y1={groundY} x2="280" y2={groundY} className="ground-line" />
+      <line x1="72" y1={rkbY} x2="248" y2={rkbY} className="rkb-line" />
+
+      <line x1="96" y1={rkbY} x2="96" y2={groundY} className="derrick-leg" />
+      <line x1="224" y1={rkbY} x2="224" y2={groundY} className="derrick-leg" />
+      <line x1="96" y1={rkbY} x2="224" y2={groundY} className="derrick-brace" />
+      <line x1="224" y1={rkbY} x2="96" y2={groundY} className="derrick-brace" />
+
+      <line x1="268" y1={rkbY} x2="268" y2={groundY} className="measure-line" />
+      <line x1="262" y1={rkbY} x2="274" y2={rkbY} className="measure-tick" />
+      <line x1="262" y1={groundY} x2="274" y2={groundY} className="measure-tick" />
+
+      <text x="40" y={groundY - 10} className="diagram-label">
+        Ground Level
+      </text>
+      <text x="72" y={rkbY - 10} className="diagram-label rkb-label">
+        RKB
+      </text>
+      <text x="280" y={(rkbY + groundY) / 2} className="diagram-value">
+        {formatNumber(rkbElevationM)} m
+      </text>
+      <text x="38" y={groundY + 26} className="diagram-note">
+        {descriptionLines.map((line, index) => (
+          <tspan key={line} x="38" dy={index === 0 ? 0 : 14}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </svg>
+  )
+}
+
+function FormationDefinedControlsPanel({
+  rkbElevationM,
+  onRkbElevationChange,
+  modelType,
+  onModelTypeChange,
+}) {
   return (
     <section className="panel rig-panel">
       <div className="panel-header">
@@ -218,7 +338,6 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTyp
                 type="button"
                 className={modelType === 'idealized' ? 'is-active' : ''}
                 onClick={() => onModelTypeChange('idealized')}
-                aria-pressed={modelType === 'idealized'}
               >
                 Idealized
               </button>
@@ -226,7 +345,6 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTyp
                 type="button"
                 className={modelType === 'realistic' ? 'is-active' : ''}
                 onClick={() => onModelTypeChange('realistic')}
-                aria-pressed={modelType === 'realistic'}
               >
                 Realistic
               </button>
@@ -234,10 +352,10 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTyp
           </div>
 
           <div className="control-group">
-            <label htmlFor="rkb-elevation-range">RKB elevation above ground</label>
+            <label htmlFor="formation-rkb-range">RKB elevation above ground</label>
             <div className="control-row">
               <input
-                id="rkb-elevation-range"
+                id="formation-rkb-range"
                 type="range"
                 min="0"
                 max={MAX_RKB_ELEVATION_M}
@@ -260,52 +378,98 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange, modelType, onModelTyp
         </div>
       </div>
 
-      <svg viewBox="0 0 320 500" className="rig-diagram" aria-label="Rig elevation diagram">
-        <defs>
-          <linearGradient id="sandstoneGradient" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(202, 158, 90, 0.18)" />
-            <stop offset="100%" stopColor="rgba(202, 158, 90, 0.04)" />
-          </linearGradient>
-        </defs>
+      <ReferenceDiagramSvg
+        rkbElevationM={rkbElevationM}
+        descriptionLines={[
+          'Formation pressures are fixed',
+          'relative to ground level.',
+          'Equivalent mud weight is',
+          'recalculated relative to RKB.',
+        ]}
+      />
+    </section>
+  )
+}
 
-        <rect
-          x="28"
-          y={groundY}
-          width="264"
-          height={sandstoneHeight}
-          fill="url(#sandstoneGradient)"
-          rx="14"
-        />
-        <line x1="40" y1={groundY} x2="280" y2={groundY} className="ground-line" />
-        <line x1="72" y1={rkbY} x2="248" y2={rkbY} className="rkb-line" />
+function EmwDefinedControlsPanel({
+  rkbElevationM,
+  onRkbElevationChange,
+  poreEmwSg,
+  onPoreEmwChange,
+  fractureEmwSg,
+  onFractureEmwChange,
+}) {
+  return (
+    <section className="panel rig-panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Reference Diagram</p>
+        </div>
+        <div className="panel-controls">
+          <div className="control-group compact-control-group">
+            <label htmlFor="pore-emw-input">Pore EMW</label>
+            <div className="value-control-row">
+              <input
+                id="pore-emw-input"
+                type="number"
+                min="0"
+                step="0.1"
+                value={poreEmwSg}
+                onChange={(event) => onPoreEmwChange(Number(event.target.value))}
+              />
+              <span className="unit-label">SG</span>
+            </div>
+          </div>
 
-        <line x1="96" y1={rkbY} x2="96" y2={groundY} className="derrick-leg" />
-        <line x1="224" y1={rkbY} x2="224" y2={groundY} className="derrick-leg" />
-        <line x1="96" y1={rkbY} x2="224" y2={groundY} className="derrick-brace" />
-        <line x1="224" y1={rkbY} x2="96" y2={groundY} className="derrick-brace" />
+          <div className="control-group compact-control-group">
+            <label htmlFor="fracture-emw-input">Fracture EMW</label>
+            <div className="value-control-row">
+              <input
+                id="fracture-emw-input"
+                type="number"
+                min="0"
+                step="0.1"
+                value={fractureEmwSg}
+                onChange={(event) => onFractureEmwChange(Number(event.target.value))}
+              />
+              <span className="unit-label">SG</span>
+            </div>
+          </div>
 
-        <line x1="268" y1={rkbY} x2="268" y2={groundY} className="measure-line" />
-        <line x1="262" y1={rkbY} x2="274" y2={rkbY} className="measure-tick" />
-        <line x1="262" y1={groundY} x2="274" y2={groundY} className="measure-tick" />
+          <div className="control-group">
+            <label htmlFor="emw-defined-rkb-range">RKB elevation above ground</label>
+            <div className="control-row">
+              <input
+                id="emw-defined-rkb-range"
+                type="range"
+                min="0"
+                max={MAX_RKB_ELEVATION_M}
+                step="1"
+                value={rkbElevationM}
+                onChange={(event) => onRkbElevationChange(Number(event.target.value))}
+              />
+              <input
+                type="number"
+                min="0"
+                max={MAX_RKB_ELEVATION_M}
+                step="1"
+                value={rkbElevationM}
+                onChange={(event) => onRkbElevationChange(Number(event.target.value))}
+                aria-label="RKB elevation in meters"
+              />
+              <span className="unit-label">m</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        <text x="40" y={groundY - 10} className="diagram-label">
-          Ground Level
-        </text>
-        <text x="72" y={rkbY - 10} className="diagram-label rkb-label">
-          RKB
-        </text>
-        <text x="280" y={(rkbY + groundY) / 2} className="diagram-value">
-          {formatNumber(rkbElevationM)} m
-        </text>
-        <text x="38" y={groundY + 26} className="diagram-note">
-          <tspan x="38" dy="0">
-            Water-logged sandstone continues
-          </tspan>
-          <tspan x="38" dy="14">
-            from 0 m to 500 m TVD below ground.
-          </tspan>
-        </text>
-      </svg>
+      <ReferenceDiagramSvg
+        rkbElevationM={rkbElevationM}
+        descriptionLines={[
+          'Fixed EMW lines imply pressure',
+          'increasing with depth below RKB.',
+        ]}
+      />
     </section>
   )
 }
@@ -318,8 +482,9 @@ function Equation({ children }) {
   )
 }
 
-function EmwDocumentationPanel() {
+function DocumentationPanel({ activeTab }) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const isFormationTab = activeTab === 'formation'
 
   return (
     <section className="panel documentation-panel">
@@ -332,32 +497,56 @@ function EmwDocumentationPanel() {
         <span className="documentation-toggle-icon" aria-hidden="true">
           {isExpanded ? '▼' : '▶'}
         </span>
-        <span>Equivalent Mud Weight Demo</span>
+        <span>{isFormationTab ? 'Formation-Defined View' : 'EMW-Defined View'}</span>
       </button>
 
       <div className={`documentation-body ${isExpanded ? 'is-expanded' : ''}`}>
         <div className="documentation-content">
-          <section className="documentation-section">
-            <h2>Overview</h2>
-            <ul>
-              <li>EMW is calculated from the pressure relative to RKB.</li>
-              <li>
-                The measured gauge pressures in the rock are fixed and stored offset from
-                ground level.
-              </li>
-            </ul>
-          </section>
+          {isFormationTab ? (
+            <>
+              <section className="documentation-section">
+                <h2>Overview</h2>
+                <ul>
+                  <li>Formation pressures are fixed relative to ground level.</li>
+                  <li>The pressure plot can be displayed relative to ground level or RKB.</li>
+                  <li>Equivalent mud weight is recalculated relative to RKB.</li>
+                </ul>
+              </section>
 
-          <section className="documentation-section">
-            <h2>Equations</h2>
-            <Equation>{'P = \\rho g h'}</Equation>
-            <Equation>{'\\rho_{eq} = \\frac{P}{g h_{RKB}}'}</Equation>
-            <ul>
-              <li><InlineMath math="P" /> = gauge pressure in rock</li>
-              <li><InlineMath math="g" /> = 9.81 m/s²</li>
-              <li><InlineMath math="h_{RKB}" /> = depth below RKB</li>
-            </ul>
-          </section>
+              <section className="documentation-section">
+                <h2>Equations</h2>
+                <Equation>{'P = \\rho g h'}</Equation>
+                <Equation>{'\\rho_{eq} = \\frac{P}{g h_{RKB}}'}</Equation>
+                <ul>
+                  <li><InlineMath math="P" /> = gauge pressure in rock</li>
+                  <li><InlineMath math="g" /> = 9.81 m/s²</li>
+                  <li><InlineMath math="h_{RKB}" /> = depth below RKB</li>
+                </ul>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="documentation-section">
+                <h2>Overview</h2>
+                <ul>
+                  <li>Fixed EMW lines imply gauge pressure increasing linearly with depth below RKB.</li>
+                  <li>This tab shows the inverse of the formation-defined view.</li>
+                  <li>Vertical EMW lines represent fixed density assumptions rather than fixed rock pressures.</li>
+                </ul>
+              </section>
+
+              <section className="documentation-section">
+                <h2>Equations</h2>
+                <Equation>{'P = \\rho_{eq} g h_{RKB}'}</Equation>
+                <Equation>{'P_{kPa} = SG \\cdot 9.81 \\cdot h_{RKB}'}</Equation>
+                <ul>
+                  <li><InlineMath math="SG" /> = fixed equivalent mud weight</li>
+                  <li><InlineMath math="h_{RKB}" /> = depth below RKB</li>
+                  <li><InlineMath math="P" /> = implied gauge pressure</li>
+                </ul>
+              </section>
+            </>
+          )}
         </div>
       </div>
     </section>
@@ -368,6 +557,8 @@ function PlotSection({
   chartType,
   title,
   eyebrow,
+  toolbarContent,
+  caption,
   xAxisLabel,
   xAxisInputStep,
   xAxisDomain,
@@ -380,6 +571,14 @@ function PlotSection({
   chartData,
   rkbElevationM,
   yAxisDomain,
+  yAxisDataKey = 'depthBelowRkbM',
+  yAxisLabel = 'Depth below RKB (m)',
+  hoveredYValue,
+  referenceAreaStartY = rkbElevationM,
+  showReferenceArea = true,
+  showGroundReferenceLine = true,
+  groundReferenceLabel = 'Ground Level',
+  showTooltipApparentGradient = true,
   hoverState,
   setHoverState,
   onZoom,
@@ -390,7 +589,9 @@ function PlotSection({
   onApplyManualXAxisRange,
   onClearManualXAxisRange,
 }) {
-  const hoveredRow = hoverState?.hoveredRow
+  const hoveredRow =
+    hoverState?.chartType === chartType || !hoverState ? hoverState?.hoveredRow : null
+  const resolvedHoveredYValue = hoveredYValue ?? hoverState?.depthBelowRkbM ?? null
   const [dragState, setDragState] = useState(null)
   const [isEditingAxisRange, setIsEditingAxisRange] = useState(false)
   const [axisRangeDraft, setAxisRangeDraft] = useState({
@@ -400,8 +601,8 @@ function PlotSection({
   const showHoverGuide =
     hoveredRow &&
     chartType === 'pressure' &&
-    hoverState.depthBelowRkbM > 0 &&
-    hoverState.pressureKPa !== null
+    hoverState?.depthBelowRkbM > 0 &&
+    hoverState?.pressureKPa !== null
 
   return (
     <section className="panel chart-panel">
@@ -411,6 +612,7 @@ function PlotSection({
           <h2>{title}</h2>
         </div>
         <div className="chart-heading-actions">
+          {toolbarContent}
           <span className="chart-zoom-label">Zoom</span>
           <button
             type="button"
@@ -445,8 +647,8 @@ function PlotSection({
               type="button"
               className={rangeMode === 'manual' ? 'is-active' : ''}
               onClick={() => {
-                const nextMin = Number(axisRangeDraft.min)
-                const nextMax = Number(axisRangeDraft.max)
+                const nextMin = Number(isEditingAxisRange ? axisRangeDraft.min : rangeControlDomain[0])
+                const nextMax = Number(isEditingAxisRange ? axisRangeDraft.max : rangeControlDomain[1])
 
                 if (!Number.isFinite(nextMin) || !Number.isFinite(nextMax) || nextMax <= nextMin) {
                   return
@@ -536,6 +738,8 @@ function PlotSection({
         </div>
       </div>
 
+      {caption ? <p className="chart-caption">{caption}</p> : null}
+
       <div
         className={`chart-wrap ${dragState ? 'is-panning' : ''}`}
         onWheel={(event) =>
@@ -580,27 +784,31 @@ function PlotSection({
             onMouseLeave={() => setHoverState(null)}
           >
             <CartesianGrid strokeDasharray="4 4" stroke="rgba(88, 104, 127, 0.22)" />
-            <ReferenceArea
-              y1={rkbElevationM}
-              y2={yAxisDomain[1]}
-              fill="rgba(202, 158, 90, 0.08)"
-            />
-            <ReferenceLine
-              y={rkbElevationM}
-              stroke="#4d5f73"
-              strokeWidth={2}
-              strokeDasharray="6 6"
-              label={{
-                value: 'Ground Level',
-                position: 'insideBottomRight',
-                fill: '#4d5f73',
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            />
+            {showReferenceArea ? (
+              <ReferenceArea
+                y1={referenceAreaStartY}
+                y2={yAxisDomain[1]}
+                fill="rgba(202, 158, 90, 0.08)"
+              />
+            ) : null}
+            {showGroundReferenceLine ? (
+              <ReferenceLine
+                y={referenceAreaStartY}
+                stroke="#4d5f73"
+                strokeWidth={2}
+                strokeDasharray="6 6"
+                label={{
+                  value: groundReferenceLabel,
+                  position: 'insideBottomRight',
+                  fill: '#4d5f73',
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              />
+            ) : null}
             {hoveredRow ? (
               <ReferenceLine
-                y={hoveredRow.depthBelowRkbM}
+                y={resolvedHoveredYValue}
                 stroke="rgba(88, 104, 127, 0.38)"
                 strokeDasharray="3 5"
               />
@@ -617,29 +825,35 @@ function PlotSection({
             <YAxis
               type="number"
               orientation="left"
-              dataKey="depthBelowRkbM"
+              dataKey={yAxisDataKey}
               domain={yAxisDomain}
               allowDataOverflow
               tickFormatter={(value) => `${Math.round(value)}`}
             >
               <Label
-                value="Depth below RKB (m)"
+                value={yAxisLabel}
                 angle={-90}
                 position="insideLeft"
                 style={{ textAnchor: 'middle' }}
               />
             </YAxis>
             <Tooltip
-              content={<DepthTooltip chartType={chartType} hoverState={hoverState} />}
+              content={
+                <DepthTooltip
+                  chartType={chartType}
+                  hoverState={hoverState}
+                  showApparentGradient={showTooltipApparentGradient}
+                />
+              }
               cursor={{ stroke: 'rgba(88, 104, 127, 0.28)', strokeDasharray: '3 5' }}
             />
             {showHoverGuide ? (
               <Line
                 type="linear"
                 data={[
-                  { depthBelowRkbM: 0, hoverGuideValue: 0 },
+                  { [yAxisDataKey]: 0, hoverGuideValue: 0 },
                   {
-                    depthBelowRkbM: hoverState.depthBelowRkbM,
+                    [yAxisDataKey]: resolvedHoveredYValue,
                     hoverGuideValue: hoverState.pressureKPa,
                   },
                 ]}
@@ -691,7 +905,7 @@ function PlotSection({
             {hoveredRow ? (
               <ReferenceDot
                 x={chartType === 'pressure' ? hoverState.pressureKPa : hoverState.emwSg}
-                y={hoverState.depthBelowRkbM}
+                y={resolvedHoveredYValue}
                 r={8}
                 fill="#fff8ef"
                 stroke={hoverState.hoveredSeries === 'pore' ? lineA.stroke : lineB.stroke}
@@ -706,97 +920,19 @@ function PlotSection({
   )
 }
 
-function App() {
-  const [rkbElevationM, setRkbElevationM] = useState(DEFAULT_RKB_ELEVATION_M)
-  const [modelType, setModelType] = useState(DEFAULT_MODEL_TYPE)
-  const [hoverState, setHoverState] = useState(null)
-
-  const chartData = useMemo(() => {
-    const points = []
-
-    for (
-      let trueDepthBelowGroundM = 0;
-      trueDepthBelowGroundM <= MAX_TRUE_DEPTH_M;
-      trueDepthBelowGroundM += DEPTH_INCREMENT_M
-    ) {
-      const depthBelowRkbM = trueDepthBelowGroundM + rkbElevationM
-      const porePressureKPa = computePressure(trueDepthBelowGroundM, modelType, 'pore')
-      const fracturePressureKPa = computePressure(
-        trueDepthBelowGroundM,
-        modelType,
-        'fracture',
-      )
-
-      // Rock pressure is fixed relative to ground at a given true depth below ground.
-      // Only the displayed reference depth changes when the rig floor moves.
-      const porePressurePa = porePressureKPa * 1000
-      const fracturePressurePa = fracturePressureKPa * 1000
-
-      // EMW is computed from hovered pressure divided by depth below RKB:
-      // rho_eq = P / (g * h_RKB). Changing RKB therefore changes EMW even when the
-      // rock-pressure dataset itself stays unchanged relative to ground.
-      // Null values prevent divide-by-zero or non-physical points from being plotted.
-      const poreEmwSg =
-        depthBelowRkbM > 0
-          ? porePressurePa / (GRAVITY_M_PER_S2 * depthBelowRkbM) / 1000
-          : null
-      const fractureEmwSg =
-        depthBelowRkbM > 0
-          ? fracturePressurePa / (GRAVITY_M_PER_S2 * depthBelowRkbM) / 1000
-          : null
-
-      points.push({
-        trueDepthBelowGroundM,
-        depthBelowRkbM,
-        porePressureKPa,
-        fracturePressureKPa,
-        poreEmwSg,
-        fractureEmwSg,
-      })
-    }
-
-    return points
-  }, [modelType, rkbElevationM])
-
-  const sanitizedHoverState = useMemo(() => {
-    if (!hoverState) {
-      return null
-    }
-
-    const matchingRow = chartData.find(
-      (row) => row.trueDepthBelowGroundM === hoverState.trueDepthBelowGroundM,
-    )
-
-    return matchingRow
-      ? buildHoverState({
-          point: matchingRow,
-          series: hoverState.hoveredSeries,
-          chartType: hoverState.chartType,
-        })
-      : null
-  }, [chartData, hoverState])
-
-  const maxDisplayedDepthM = chartData.at(-1)?.depthBelowRkbM ?? MAX_TRUE_DEPTH_M
-  const maxPressureKPa = chartData.at(-1)?.fracturePressureKPa ?? 0
-  const maxEmwSg = chartData.reduce((currentMax, row) => {
-    const rowMax = Math.max(row.poreEmwSg ?? 0, row.fractureEmwSg ?? 0)
-
-    return Math.max(currentMax, rowMax)
-  }, 0)
-  const fullPressureDomain = useMemo(
-    () => [0, Math.max(500, Math.ceil(maxPressureKPa / 500) * 500)],
-    [maxPressureKPa],
-  )
-  const fullEmwDomain = useMemo(
-    () => [0, Math.max(0.5, Math.ceil(maxEmwSg * 10) / 10)],
-    [maxEmwSg],
-  )
-  const fullDepthDomain = useMemo(() => [0, maxDisplayedDepthM], [maxDisplayedDepthM])
-
+function useChartViewport({
+  fullPressureDomain,
+  fullEmwDomain,
+  fullPressureDepthDomain,
+  fullEmwDepthDomain,
+  maxPressureDisplayedDepthM,
+  maxEmwDisplayedDepthM,
+}) {
   const [pressureZoom, setPressureZoom] = useState(null)
   const [emwZoom, setEmwZoom] = useState(null)
   const [pressureManualXAxisRange, setPressureManualXAxisRange] = useState(null)
   const [emwManualXAxisRange, setEmwManualXAxisRange] = useState(null)
+
   const pressureBaseXAxisDomain = pressureManualXAxisRange ?? fullPressureDomain
   const emwBaseXAxisDomain = emwManualXAxisRange ?? fullEmwDomain
   const pressureRangeMode = pressureManualXAxisRange ? 'manual' : 'auto'
@@ -810,8 +946,11 @@ function App() {
     [pressureZoom, pressureBaseXAxisDomain],
   )
   const pressureYAxisDomain = useMemo(
-    () => (pressureZoom ? clampDepthDomain(pressureZoom.y, maxDisplayedDepthM) : fullDepthDomain),
-    [pressureZoom, maxDisplayedDepthM, fullDepthDomain],
+    () =>
+      pressureZoom
+        ? clampDepthDomain(pressureZoom.y, maxPressureDisplayedDepthM)
+        : fullPressureDepthDomain,
+    [pressureZoom, maxPressureDisplayedDepthM, fullPressureDepthDomain],
   )
   const emwXAxisDomain = useMemo(
     () =>
@@ -821,11 +960,9 @@ function App() {
     [emwZoom, emwBaseXAxisDomain],
   )
   const emwYAxisDomain = useMemo(
-    () => (emwZoom ? clampDepthDomain(emwZoom.y, maxDisplayedDepthM) : fullDepthDomain),
-    [emwZoom, maxDisplayedDepthM, fullDepthDomain],
+    () => (emwZoom ? clampDepthDomain(emwZoom.y, maxEmwDisplayedDepthM) : fullEmwDepthDomain),
+    [emwZoom, maxEmwDisplayedDepthM, fullEmwDepthDomain],
   )
-  const pressureChartMode = pressureZoom ? 'zoomed' : 'auto'
-  const emwChartMode = emwZoom ? 'zoomed' : 'auto'
 
   function handleChartZoom(event, zoomState, setZoomState, options) {
     event.preventDefault()
@@ -859,8 +996,11 @@ function App() {
       Math.max(options.minXAxisWindow, currentXSpan * zoomFactor),
     )
     const nextYSpan = Math.min(
-      maxDisplayedDepthM,
-      Math.max(Math.min(MIN_DEPTH_WINDOW_M, maxDisplayedDepthM), currentYSpan * zoomFactor),
+      options.maxDisplayedDepthM,
+      Math.max(
+        Math.min(MIN_DEPTH_WINDOW_M, options.maxDisplayedDepthM),
+        currentYSpan * zoomFactor,
+      ),
     )
     const focusX = currentXStart + xRatio * currentXSpan
     const focusY = currentYStart + yRatio * currentYSpan
@@ -873,7 +1013,7 @@ function App() {
         options.fullXAxisDomain,
         options.minXAxisWindow,
       ),
-      y: clampDepthDomain([nextYStart, nextYStart + nextYSpan], maxDisplayedDepthM),
+      y: clampDepthDomain([nextYStart, nextYStart + nextYSpan], options.maxDisplayedDepthM),
     })
   }
 
@@ -895,137 +1035,468 @@ function App() {
         options.fullXAxisDomain,
         options.minXAxisWindow,
       ),
-      y: clampDepthDomain([nextYStart, nextYStart + ySpan], maxDisplayedDepthM),
+      y: clampDepthDomain([nextYStart, nextYStart + ySpan], options.maxDisplayedDepthM),
     })
   }
 
-  function resetPressureZoom() {
-    setPressureZoom(null)
+  return {
+    pressure: {
+      xAxisDomain: pressureXAxisDomain,
+      yAxisDomain: pressureYAxisDomain,
+      rangeControlDomain: pressureBaseXAxisDomain,
+      zoomMode: pressureZoom ? 'zoomed' : 'auto',
+      rangeMode: pressureRangeMode,
+      onZoom: (event, options) => handleChartZoom(event, pressureZoom, setPressureZoom, options),
+      onPan: (event, dragState, options) =>
+        handleChartPan(event, dragState, setPressureZoom, options),
+      onResetZoom: () => setPressureZoom(null),
+      onApplyManualXAxisRange: (nextDomain) => {
+        setPressureManualXAxisRange(
+          normalizeManualXAxisDomain(nextDomain, MIN_PRESSURE_WINDOW_KPA),
+        )
+        setPressureZoom(null)
+      },
+      onClearManualXAxisRange: () => {
+        setPressureManualXAxisRange(null)
+        setPressureZoom(null)
+      },
+    },
+    emw: {
+      xAxisDomain: emwXAxisDomain,
+      yAxisDomain: emwYAxisDomain,
+      rangeControlDomain: emwBaseXAxisDomain,
+      zoomMode: emwZoom ? 'zoomed' : 'auto',
+      rangeMode: emwRangeMode,
+      onZoom: (event, options) => handleChartZoom(event, emwZoom, setEmwZoom, options),
+      onPan: (event, dragState, options) => handleChartPan(event, dragState, setEmwZoom, options),
+      onResetZoom: () => setEmwZoom(null),
+      onApplyManualXAxisRange: (nextDomain) => {
+        setEmwManualXAxisRange(normalizeManualXAxisDomain(nextDomain, MIN_EMW_WINDOW_SG))
+        setEmwZoom(null)
+      },
+      onClearManualXAxisRange: () => {
+        setEmwManualXAxisRange(null)
+        setEmwZoom(null)
+      },
+    },
   }
+}
 
-  function resetEmwZoom() {
-    setEmwZoom(null)
-  }
+function FormationDefinedTab() {
+  const [rkbElevationM, setRkbElevationM] = useState(DEFAULT_RKB_ELEVATION_M)
+  const [modelType, setModelType] = useState(DEFAULT_MODEL_TYPE)
+  const [hoverState, setHoverState] = useState(null)
+
+  const chartData = useMemo(
+    () => buildFormationDefinedDataset(rkbElevationM, modelType),
+    [modelType, rkbElevationM],
+  )
+  const sanitizedHoverState = useMemo(() => {
+    if (!hoverState) {
+      return null
+    }
+
+    const matchingRow = chartData.find(
+      (row) => row.trueDepthBelowGroundM === hoverState.trueDepthBelowGroundM,
+    )
+
+    return matchingRow
+      ? buildHoverState({
+          point: matchingRow,
+          series: hoverState.hoveredSeries,
+          chartType: hoverState.chartType,
+        })
+      : null
+  }, [chartData, hoverState])
+
+  const maxDisplayedDepthM = chartData.at(-1)?.depthBelowRkbM ?? MAX_TRUE_DEPTH_M
+  const maxPressureKPa = chartData.at(-1)?.fracturePressureKPa ?? 0
+  const maxEmwSg = chartData.reduce((currentMax, row) => {
+    const rowMax = Math.max(row.poreEmwSg ?? 0, row.fractureEmwSg ?? 0)
+
+    return Math.max(currentMax, rowMax)
+  }, 0)
+  const fullPressureDomain = useMemo(
+    () => [0, Math.max(500, Math.ceil(maxPressureKPa / 500) * 500)],
+    [maxPressureKPa],
+  )
+  const fullEmwDomain = useMemo(
+    () => [0, Math.max(0.5, Math.ceil(maxEmwSg * 10) / 10)],
+    [maxEmwSg],
+  )
+  const fullPressureDepthDomain = useMemo(() => [0, maxDisplayedDepthM], [maxDisplayedDepthM])
+  const fullEmwDepthDomain = useMemo(() => [0, maxDisplayedDepthM], [maxDisplayedDepthM])
+  const viewport = useChartViewport({
+    fullPressureDomain,
+    fullEmwDomain,
+    fullPressureDepthDomain,
+    fullEmwDepthDomain,
+    maxPressureDisplayedDepthM: fullPressureDepthDomain[1],
+    maxEmwDisplayedDepthM: maxDisplayedDepthM,
+  })
+  const pressureHoveredYValue = sanitizedHoverState?.depthBelowRkbM
+
   return (
-    <main className="app-shell">
-      <EmwDocumentationPanel />
+    <section className="layout-grid">
+      <FormationDefinedControlsPanel
+        rkbElevationM={rkbElevationM}
+        onRkbElevationChange={(nextValue) => setRkbElevationM(clampRkbElevation(nextValue))}
+        modelType={modelType}
+        onModelTypeChange={setModelType}
+      />
 
-      <section className="layout-grid">
-        <RigDiagram
-          rkbElevationM={rkbElevationM}
-          onRkbElevationChange={(nextValue) => {
-            setRkbElevationM(clampRkbElevation(nextValue))
+      <div className="chart-stack">
+        <PlotSection
+          chartType="pressure"
+          eyebrow="Plot 1"
+          title="Pore and Fracture Gauge Pressure"
+          xAxisLabel="Gauge Pressure (kPa)"
+          xAxisInputStep={100}
+          xAxisDomain={viewport.pressure.xAxisDomain}
+          rangeControlDomain={viewport.pressure.rangeControlDomain}
+          fullXAxisDomain={fullPressureDomain}
+          minXAxisWindow={MIN_PRESSURE_WINDOW_KPA}
+          tickFormatter={(value) => `${Math.round(value)}`}
+          lineA={{
+            dataKey: 'porePressureKPa',
+            series: 'pore',
+            name: 'Pore pressure',
+            stroke: '#0b6e8a',
           }}
-          modelType={modelType}
-          onModelTypeChange={setModelType}
+          lineB={{
+            dataKey: 'fracturePressureKPa',
+            series: 'fracture',
+            name: 'Fracture pressure',
+            stroke: '#d57a2a',
+          }}
+          chartData={chartData}
+          rkbElevationM={rkbElevationM}
+          yAxisDomain={viewport.pressure.yAxisDomain}
+          yAxisLabel="Depth below RKB (m)"
+          hoveredYValue={pressureHoveredYValue}
+          showReferenceArea
+          showGroundReferenceLine
+          hoverState={sanitizedHoverState}
+          setHoverState={setHoverState}
+          onZoom={(event, options) =>
+            viewport.pressure.onZoom(event, {
+              ...options,
+              maxDisplayedDepthM: fullPressureDepthDomain[1],
+            })
+          }
+          onResetZoom={viewport.pressure.onResetZoom}
+          onPan={(event, dragState, options) =>
+            viewport.pressure.onPan(event, dragState, {
+              ...options,
+              maxDisplayedDepthM: fullPressureDepthDomain[1],
+            })
+          }
+          zoomMode={viewport.pressure.zoomMode}
+          rangeMode={viewport.pressure.rangeMode}
+          onApplyManualXAxisRange={viewport.pressure.onApplyManualXAxisRange}
+          onClearManualXAxisRange={viewport.pressure.onClearManualXAxisRange}
         />
 
-        <div className="chart-stack">
-          <PlotSection
-            chartType="pressure"
-            eyebrow="Plot 1"
-            title="Pore and Fracture Gauge Pressure"
-            xAxisLabel="Gauge Pressure (kPa)"
-            xAxisInputStep={100}
-            xAxisDomain={pressureXAxisDomain}
-            rangeControlDomain={pressureBaseXAxisDomain}
-            fullXAxisDomain={fullPressureDomain}
-            minXAxisWindow={MIN_PRESSURE_WINDOW_KPA}
-            tickFormatter={(value) => `${Math.round(value)}`}
-            lineA={{
-              dataKey: 'porePressureKPa',
-              series: 'pore',
-              name: 'Pore pressure',
-              stroke: '#0b6e8a',
-            }}
-            lineB={{
-              dataKey: 'fracturePressureKPa',
-              series: 'fracture',
-              name: 'Fracture pressure',
-              stroke: '#d57a2a',
-            }}
-            chartData={chartData}
-            rkbElevationM={rkbElevationM}
-            yAxisDomain={pressureYAxisDomain}
-            hoverState={sanitizedHoverState}
-            setHoverState={setHoverState}
-            onZoom={(event, options) =>
-              handleChartZoom(event, pressureZoom, setPressureZoom, options)
-            }
-            onResetZoom={resetPressureZoom}
-            onPan={(event, dragState, options) =>
-              handleChartPan(event, dragState, setPressureZoom, options)
-            }
-            zoomMode={pressureChartMode}
-            rangeMode={pressureRangeMode}
-            onApplyManualXAxisRange={(nextDomain) => {
-              const normalizedDomain = normalizeManualXAxisDomain(
-                nextDomain,
-                MIN_PRESSURE_WINDOW_KPA,
-              )
+        <PlotSection
+          chartType="emw"
+          eyebrow="Plot 2"
+          title="EMW (Equivalent Mud Weight) Ref. RKB"
+          xAxisLabel="Equivalent Mud Weight (SG)"
+          xAxisInputStep={0.1}
+          xAxisDomain={viewport.emw.xAxisDomain}
+          rangeControlDomain={viewport.emw.rangeControlDomain}
+          fullXAxisDomain={fullEmwDomain}
+          minXAxisWindow={MIN_EMW_WINDOW_SG}
+          tickFormatter={(value) => value.toFixed(2)}
+          lineA={{
+            dataKey: 'poreEmwSg',
+            series: 'pore',
+            name: 'Pore-pressure EMW',
+            stroke: '#0b6e8a',
+          }}
+          lineB={{
+            dataKey: 'fractureEmwSg',
+            series: 'fracture',
+            name: 'Fracture-pressure EMW',
+            stroke: '#d57a2a',
+          }}
+          chartData={chartData}
+          rkbElevationM={rkbElevationM}
+          yAxisDomain={viewport.emw.yAxisDomain}
+          hoverState={sanitizedHoverState}
+          setHoverState={setHoverState}
+          onZoom={(event, options) =>
+            viewport.emw.onZoom(event, {
+              ...options,
+              maxDisplayedDepthM,
+            })
+          }
+          onResetZoom={viewport.emw.onResetZoom}
+          onPan={(event, dragState, options) =>
+            viewport.emw.onPan(event, dragState, {
+              ...options,
+              maxDisplayedDepthM,
+            })
+          }
+          zoomMode={viewport.emw.zoomMode}
+          rangeMode={viewport.emw.rangeMode}
+          onApplyManualXAxisRange={viewport.emw.onApplyManualXAxisRange}
+          onClearManualXAxisRange={viewport.emw.onClearManualXAxisRange}
+        />
+      </div>
+    </section>
+  )
+}
 
-              setPressureManualXAxisRange(normalizedDomain)
-              setPressureZoom(null)
-            }}
-            onClearManualXAxisRange={() => {
-              setPressureManualXAxisRange(null)
-              setPressureZoom(null)
-            }}
-          />
+function EmwDefinedTab() {
+  const [rkbElevationM, setRkbElevationM] = useState(DEFAULT_RKB_ELEVATION_M)
+  const [poreEmwSg, setPoreEmwSg] = useState(DEFAULT_PORE_EMW_SG)
+  const [fractureEmwSg, setFractureEmwSg] = useState(DEFAULT_FRACTURE_EMW_SG)
+  const [pressureDepthReference, setPressureDepthReference] = useState(
+    DEFAULT_PRESSURE_DEPTH_REFERENCE,
+  )
+  const [hoverState, setHoverState] = useState(null)
 
-          <PlotSection
-            chartType="emw"
-            eyebrow="Plot 2"
-            title="EMW (Equivalent Mud Weight) Ref. RKB"
-            xAxisLabel="Equivalent Mud Weight (SG)"
-            xAxisInputStep={0.1}
-            xAxisDomain={emwXAxisDomain}
-            rangeControlDomain={emwBaseXAxisDomain}
-            fullXAxisDomain={fullEmwDomain}
-            minXAxisWindow={MIN_EMW_WINDOW_SG}
-            tickFormatter={(value) => value.toFixed(2)}
-            lineA={{
-              dataKey: 'poreEmwSg',
-              series: 'pore',
-              name: 'Pore-pressure EMW',
-              stroke: '#0b6e8a',
-            }}
-            lineB={{
-              dataKey: 'fractureEmwSg',
-              series: 'fracture',
-              name: 'Fracture-pressure EMW',
-              stroke: '#d57a2a',
-            }}
-            chartData={chartData}
-            rkbElevationM={rkbElevationM}
-            yAxisDomain={emwYAxisDomain}
-            hoverState={sanitizedHoverState}
-            setHoverState={setHoverState}
-            onZoom={(event, options) =>
-              handleChartZoom(event, emwZoom, setEmwZoom, options)
-            }
-            onResetZoom={resetEmwZoom}
-            onPan={(event, dragState, options) =>
-              handleChartPan(event, dragState, setEmwZoom, options)
-            }
-            zoomMode={emwChartMode}
-            rangeMode={emwRangeMode}
-            onApplyManualXAxisRange={(nextDomain) => {
-              const normalizedDomain = normalizeManualXAxisDomain(
-                nextDomain,
-                MIN_EMW_WINDOW_SG,
-              )
+  const chartData = useMemo(
+    () => buildEmwDefinedDataset(rkbElevationM, poreEmwSg, fractureEmwSg),
+    [fractureEmwSg, poreEmwSg, rkbElevationM],
+  )
+  const sanitizedHoverState = useMemo(() => {
+    if (!hoverState) {
+      return null
+    }
 
-              setEmwManualXAxisRange(normalizedDomain)
-              setEmwZoom(null)
-            }}
-            onClearManualXAxisRange={() => {
-              setEmwManualXAxisRange(null)
-              setEmwZoom(null)
-            }}
-          />
-        </div>
-      </section>
+    const matchingRow = chartData.find(
+      (row) => row.trueDepthBelowGroundM === hoverState.trueDepthBelowGroundM,
+    )
+
+    return matchingRow
+      ? buildHoverState({
+          point: matchingRow,
+          series: hoverState.hoveredSeries,
+          chartType: hoverState.chartType,
+        })
+      : null
+  }, [chartData, hoverState])
+  const pressureChartData = useMemo(
+    () =>
+      chartData.map((row) => ({
+        ...row,
+        pressurePlotDepthM:
+          pressureDepthReference === 'gl' ? row.trueDepthBelowGroundM : row.depthBelowRkbM,
+      })),
+    [chartData, pressureDepthReference],
+  )
+
+  const maxDisplayedDepthM = chartData.at(-1)?.depthBelowRkbM ?? MAX_TRUE_DEPTH_M
+  const maxPressureKPa = chartData.at(-1)?.fracturePressureKPa ?? 0
+  const fullPressureDomain = useMemo(
+    () => [0, Math.max(500, Math.ceil(maxPressureKPa / 500) * 500)],
+    [maxPressureKPa],
+  )
+  const fullEmwDomain = useMemo(
+    () => [0, Math.max(0.5, Math.ceil(Math.max(poreEmwSg, fractureEmwSg) * 10) / 10)],
+    [fractureEmwSg, poreEmwSg],
+  )
+  const fullPressureDepthDomain = useMemo(
+    () =>
+      pressureDepthReference === 'gl' ? [0, MAX_TRUE_DEPTH_M] : [0, maxDisplayedDepthM],
+    [maxDisplayedDepthM, pressureDepthReference],
+  )
+  const fullDepthDomain = useMemo(() => [0, maxDisplayedDepthM], [maxDisplayedDepthM])
+  const viewport = useChartViewport({
+    fullPressureDomain,
+    fullEmwDomain,
+    fullPressureDepthDomain,
+    fullEmwDepthDomain: fullDepthDomain,
+    maxPressureDisplayedDepthM: fullPressureDepthDomain[1],
+    maxEmwDisplayedDepthM: maxDisplayedDepthM,
+  })
+  const pressureHoveredYValue =
+    pressureDepthReference === 'gl'
+      ? sanitizedHoverState?.trueDepthBelowGroundM
+      : sanitizedHoverState?.depthBelowRkbM
+
+  return (
+    <section className="layout-grid">
+      <EmwDefinedControlsPanel
+        rkbElevationM={rkbElevationM}
+        onRkbElevationChange={(nextValue) => setRkbElevationM(clampRkbElevation(nextValue))}
+        poreEmwSg={poreEmwSg}
+        onPoreEmwChange={(nextValue) => setPoreEmwSg(clampEmwSg(nextValue, DEFAULT_PORE_EMW_SG))}
+        fractureEmwSg={fractureEmwSg}
+        onFractureEmwChange={(nextValue) =>
+          setFractureEmwSg(clampEmwSg(nextValue, DEFAULT_FRACTURE_EMW_SG))
+        }
+      />
+
+      <div className="chart-stack">
+        <PlotSection
+          chartType="pressure"
+          eyebrow="Plot 1"
+          title="Implied Gauge Pressure"
+          toolbarContent={
+            <div className="chart-inline-control">
+              <span className="chart-inline-label">Pressure depth reference</span>
+              <div
+                className="segmented-control segmented-control--compact"
+                role="radiogroup"
+                aria-label="Pressure depth reference"
+              >
+                <button
+                  type="button"
+                  className={pressureDepthReference === 'gl' ? 'is-active' : ''}
+                  onClick={() => setPressureDepthReference('gl')}
+                >
+                  Ground Level
+                </button>
+                <button
+                  type="button"
+                  className={pressureDepthReference === 'rkb' ? 'is-active' : ''}
+                  onClick={() => setPressureDepthReference('rkb')}
+                >
+                  RKB
+                </button>
+              </div>
+            </div>
+          }
+          xAxisLabel="Gauge Pressure (kPa)"
+          xAxisInputStep={100}
+          xAxisDomain={viewport.pressure.xAxisDomain}
+          rangeControlDomain={viewport.pressure.rangeControlDomain}
+          fullXAxisDomain={fullPressureDomain}
+          minXAxisWindow={MIN_PRESSURE_WINDOW_KPA}
+          tickFormatter={(value) => `${Math.round(value)}`}
+          lineA={{
+            dataKey: 'porePressureKPa',
+            series: 'pore',
+            name: 'Implied pore pressure',
+            stroke: '#0b6e8a',
+          }}
+          lineB={{
+            dataKey: 'fracturePressureKPa',
+            series: 'fracture',
+            name: 'Implied fracture pressure',
+            stroke: '#d57a2a',
+          }}
+          chartData={pressureChartData}
+          rkbElevationM={rkbElevationM}
+          yAxisDomain={viewport.pressure.yAxisDomain}
+          yAxisDataKey="pressurePlotDepthM"
+          yAxisLabel={
+            pressureDepthReference === 'gl'
+              ? 'Depth below Ground Level (m)'
+              : 'Depth below RKB (m)'
+          }
+          hoveredYValue={pressureHoveredYValue}
+          showReferenceArea={pressureDepthReference === 'rkb'}
+          showGroundReferenceLine={pressureDepthReference === 'rkb'}
+          showTooltipApparentGradient={false}
+          hoverState={sanitizedHoverState}
+          setHoverState={setHoverState}
+          onZoom={(event, options) =>
+            viewport.pressure.onZoom(event, {
+              ...options,
+              maxDisplayedDepthM: fullPressureDepthDomain[1],
+            })
+          }
+          onResetZoom={viewport.pressure.onResetZoom}
+          onPan={(event, dragState, options) =>
+            viewport.pressure.onPan(event, dragState, {
+              ...options,
+              maxDisplayedDepthM: fullPressureDepthDomain[1],
+            })
+          }
+          zoomMode={viewport.pressure.zoomMode}
+          rangeMode={viewport.pressure.rangeMode}
+          onApplyManualXAxisRange={viewport.pressure.onApplyManualXAxisRange}
+          onClearManualXAxisRange={viewport.pressure.onClearManualXAxisRange}
+        />
+
+        <PlotSection
+          chartType="emw"
+          eyebrow="Plot 2"
+          title="Fixed EMW Assumptions"
+          xAxisLabel="Equivalent Mud Weight (SG)"
+          xAxisInputStep={0.1}
+          xAxisDomain={viewport.emw.xAxisDomain}
+          rangeControlDomain={viewport.emw.rangeControlDomain}
+          fullXAxisDomain={fullEmwDomain}
+          minXAxisWindow={MIN_EMW_WINDOW_SG}
+          tickFormatter={(value) => value.toFixed(2)}
+          lineA={{
+            dataKey: 'poreEmwSg',
+            series: 'pore',
+            name: 'Pore EMW',
+            stroke: '#0b6e8a',
+          }}
+          lineB={{
+            dataKey: 'fractureEmwSg',
+            series: 'fracture',
+            name: 'Fracture EMW',
+            stroke: '#d57a2a',
+          }}
+          chartData={chartData}
+          rkbElevationM={rkbElevationM}
+          yAxisDomain={viewport.emw.yAxisDomain}
+          hoverState={sanitizedHoverState}
+          setHoverState={setHoverState}
+          onZoom={(event, options) =>
+            viewport.emw.onZoom(event, {
+              ...options,
+              maxDisplayedDepthM,
+            })
+          }
+          onResetZoom={viewport.emw.onResetZoom}
+          onPan={(event, dragState, options) =>
+            viewport.emw.onPan(event, dragState, {
+              ...options,
+              maxDisplayedDepthM,
+            })
+          }
+          zoomMode={viewport.emw.zoomMode}
+          rangeMode={viewport.emw.rangeMode}
+          onApplyManualXAxisRange={viewport.emw.onApplyManualXAxisRange}
+          onClearManualXAxisRange={viewport.emw.onClearManualXAxisRange}
+        />
+      </div>
+    </section>
+  )
+}
+
+function Tabs({ activeTab, onChange }) {
+  return (
+    <div className="tab-bar" role="tablist" aria-label="EMW demo views">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'formation'}
+        className={`tab-button ${activeTab === 'formation' ? 'is-active' : ''}`}
+        onClick={() => onChange('formation')}
+      >
+        Formation-defined
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === 'emw'}
+        className={`tab-button ${activeTab === 'emw' ? 'is-active' : ''}`}
+        onClick={() => onChange('emw')}
+      >
+        EMW-defined
+      </button>
+    </div>
+  )
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState(DEFAULT_ACTIVE_TAB)
+
+  return (
+    <main className="app-shell">
+      <DocumentationPanel activeTab={activeTab} />
+      <Tabs activeTab={activeTab} onChange={setActiveTab} />
+      {activeTab === 'formation' ? <FormationDefinedTab /> : <EmwDefinedTab />}
     </main>
   )
 }
