@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { BlockMath, InlineMath } from 'react-katex'
 import {
   CartesianGrid,
   Label,
@@ -11,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import 'katex/dist/katex.min.css'
 import './App.css'
 
 const GRAVITY_M_PER_S2 = 9.81
@@ -66,9 +68,10 @@ function DepthTooltip({ active, payload, label }) {
 }
 
 function RigDiagram({ rkbElevationM, onRkbElevationChange }) {
-  const totalHeight = 360
+  const totalHeight = 500
   const topPadding = 48
-  const bottomPadding = 48
+  const bottomPadding = 160
+  const sandstoneHeight = 216
   const usableHeight = totalHeight - topPadding - bottomPadding
   const rkbY =
     topPadding +
@@ -80,7 +83,6 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange }) {
       <div className="panel-header">
         <div>
           <p className="eyebrow">Reference Diagram</p>
-          <h2>Ground-fixed rock, movable RKB</h2>
         </div>
         <div className="control-group">
           <label htmlFor="rkb-elevation-range">RKB elevation above ground</label>
@@ -108,7 +110,7 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange }) {
         </div>
       </div>
 
-      <svg viewBox="0 0 320 360" className="rig-diagram" aria-label="Rig elevation diagram">
+      <svg viewBox="0 0 320 500" className="rig-diagram" aria-label="Rig elevation diagram">
         <defs>
           <linearGradient id="sandstoneGradient" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="rgba(202, 158, 90, 0.18)" />
@@ -116,7 +118,14 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange }) {
           </linearGradient>
         </defs>
 
-        <rect x="28" y={groundY} width="264" height="72" fill="url(#sandstoneGradient)" rx="14" />
+        <rect
+          x="28"
+          y={groundY}
+          width="264"
+          height={sandstoneHeight}
+          fill="url(#sandstoneGradient)"
+          rx="14"
+        />
         <line x1="40" y1={groundY} x2="280" y2={groundY} className="ground-line" />
         <line x1="72" y1={rkbY} x2="248" y2={rkbY} className="rkb-line" />
 
@@ -139,25 +148,69 @@ function RigDiagram({ rkbElevationM, onRkbElevationChange }) {
           {formatNumber(rkbElevationM)} m
         </text>
         <text x="38" y={groundY + 26} className="diagram-note">
-          Water-logged sandstone continues from 0 m to 500 m TVD below ground.
+          <tspan x="38" dy="0">
+            Water-logged sandstone continues
+          </tspan>
+          <tspan x="38" dy="14">
+            from 0 m to 500 m TVD below ground.
+          </tspan>
         </text>
       </svg>
-
-      <div className="note-box">
-        <p>Rock pressures remain fixed to true depth below ground.</p>
-        <p>Equivalent mud weight is recalculated from gauge pressure using depth below RKB.</p>
-      </div>
     </section>
   )
 }
 
-function SummaryCard({ label, value, detail, accentClassName }) {
+function Equation({ children }) {
   return (
-    <div className={`summary-card ${accentClassName}`}>
-      <p className="summary-label">{label}</p>
-      <p className="summary-value">{value}</p>
-      <p className="summary-detail">{detail}</p>
+    <div className="equation-block">
+      <BlockMath math={children} />
     </div>
+  )
+}
+
+function EmwDocumentationPanel() {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  return (
+    <section className="panel documentation-panel">
+      <button
+        type="button"
+        className="documentation-toggle"
+        onClick={() => setIsExpanded((currentValue) => !currentValue)}
+        aria-expanded={isExpanded}
+      >
+        <span className="documentation-toggle-icon" aria-hidden="true">
+          {isExpanded ? '▼' : '▶'}
+        </span>
+        <span>Equivalent Mud Weight Demo</span>
+      </button>
+
+      <div className={`documentation-body ${isExpanded ? 'is-expanded' : ''}`}>
+        <div className="documentation-content">
+          <section className="documentation-section">
+            <h2>Overview</h2>
+            <ul>
+              <li>EMW is calculated from the pressure relative to RKB.</li>
+              <li>
+                The measured gauge pressures in the rock are fixed and stored offset from
+                ground level.
+              </li>
+            </ul>
+          </section>
+
+          <section className="documentation-section">
+            <h2>Equations</h2>
+            <Equation>{'P = \\rho g h'}</Equation>
+            <Equation>{'\\rho_{eq} = \\frac{P}{g h_{RKB}}'}</Equation>
+            <ul>
+              <li><InlineMath math="P" /> = gauge pressure in rock</li>
+              <li><InlineMath math="g" /> = 9.81 m/s²</li>
+              <li><InlineMath math="h_{RKB}" /> = depth below RKB</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -325,52 +378,9 @@ function App() {
 
   const maxDisplayedDepthM = chartData.at(-1)?.depthBelowRkbM ?? MAX_TRUE_DEPTH_M
   const maxPressureKPa = chartData.at(-1)?.fracturePressureKPa ?? 0
-  const maxEmwSg = chartData.reduce((currentMax, point) => {
-    return Math.max(currentMax, point.fractureEmwSg ?? 0, point.poreEmwSg ?? 0)
-  }, 0)
-  const exampleTrueDepthBelowGroundM = 100
-  const examplePoint =
-    chartData.find((point) => point.trueDepthBelowGroundM === exampleTrueDepthBelowGroundM) ??
-    chartData[0]
-
   return (
     <main className="app-shell">
-      <section className="intro panel">
-        <p className="eyebrow">Equivalent Mud Weight Demo</p>
-        <h1>How rig floor elevation changes the reference depth, not the rock pressure</h1>
-        <p className="intro-copy">
-          Pore pressure and fracture pressure are fixed relative to ground level. Raising the
-          rig floor increases depth below RKB for the same sandstone point, so the pressure
-          curves shift deeper on the display while equivalent mud weight is recalculated using
-          the larger depth denominator.
-        </p>
-        <div className="summary-grid">
-          <SummaryCard
-            label={`Example pore pressure at ${exampleTrueDepthBelowGroundM} m TVD below ground`}
-            value={`${formatNumber(examplePoint?.porePressureKPa)} kPa`}
-            detail={`Displayed at ${formatNumber(examplePoint?.depthBelowRkbM)} m below RKB`}
-            accentClassName="summary-card-pore"
-          />
-          <SummaryCard
-            label={`Example fracture pressure at ${exampleTrueDepthBelowGroundM} m TVD below ground`}
-            value={`${formatNumber(examplePoint?.fracturePressureKPa)} kPa`}
-            detail={`Displayed at ${formatNumber(examplePoint?.depthBelowRkbM)} m below RKB`}
-            accentClassName="summary-card-fracture"
-          />
-          <SummaryCard
-            label="Pore-pressure EMW at the same example point"
-            value={`${formatNumber(examplePoint?.poreEmwSg, 3)} SG`}
-            detail={`RKB = ${formatNumber(rkbElevationM)} m above ground`}
-            accentClassName="summary-card-pore"
-          />
-          <SummaryCard
-            label="Fracture-pressure EMW at the same example point"
-            value={`${formatNumber(examplePoint?.fractureEmwSg, 3)} SG`}
-            detail={`RKB = ${formatNumber(rkbElevationM)} m above ground`}
-            accentClassName="summary-card-fracture"
-          />
-        </div>
-      </section>
+      <EmwDocumentationPanel />
 
       <section className="layout-grid">
         <RigDiagram
@@ -383,7 +393,7 @@ function App() {
         <div className="chart-stack">
           <PlotSection
             eyebrow="Plot 1"
-            title="Gauge pressure referenced to depth below RKB"
+            title="Pore and Fracture Gauge Pressure"
             xAxisLabel="Gauge Pressure (kPa)"
             domain={[0, Math.ceil(maxPressureKPa / 500) * 500]}
             tickFormatter={(value) => `${Math.round(value)}`}
@@ -404,9 +414,9 @@ function App() {
 
           <PlotSection
             eyebrow="Plot 2"
-            title="Equivalent mud weight from RKB-referenced depth"
+            title="EMW (Equivalent Mud Weight) Ref. RKB"
             xAxisLabel="Equivalent Mud Weight (SG)"
-            domain={[0, Math.ceil(maxEmwSg * 10) / 10]}
+            domain={[0, 1.7]}
             tickFormatter={(value) => value.toFixed(2)}
             lineA={{
               dataKey: 'poreEmwSg',
